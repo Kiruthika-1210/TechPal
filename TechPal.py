@@ -15,29 +15,28 @@ from langchain.chains import LLMChain
 from langchain.memory import ConversationBufferMemory
 
 
-# -----------------------------
-# Streamlit UI Setup
-# -----------------------------
+# ----------------------------- Streamlit UI -----------------------------
 
-st.title("TechPal - AI Assistance for Every Tech Challenge")
+st.title("🤖 TechPal - AI Assistance for Every Tech Challenge")
 st.write("Your AI developer assistant for coding, deployment, databases, and more!")
+
+# Initialize session state variables
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 # Optional: Role selection dropdown (for role-based responses)
 role = st.selectbox("Choose your role", ["Developer", "Admin", "Student", "User"])
 
-# Input text box for user queries
-input_txt = st.text_input("Enter your query and let TechPal handle it! ⚡")
+#To restart a fresh session
+if st.button("🗑️ Clear Chat"):
+    st.session_state.chat_history = []
+
+
+
+# ----------------------------- LangChain Setup -----------------------------
 
 # Keeps track of conversation for multi-turn Q&A
 memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-
-# -----------------------------
-# LangChain Prompt Setup
-# -----------------------------
-
-# We define a chat prompt template that includes:
-# - System instruction (what TechPal should behave like)
-# - User input placeholder (query + role)
 
 system_prompt = """ You are TechPal, an AI assistant for tech users.
         - Developer → Give code-focused answers, snippets, and debugging tips.
@@ -48,13 +47,12 @@ system_prompt = """ You are TechPal, an AI assistant for tech users.
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
-    ("user", "{input_text}")
+    ("user", "{input}")   
 ])
 
 
-# -----------------------------
-# LLM Setup
-# -----------------------------
+
+# ----------------------------- LLM Setup -----------------------------
 
 # Using Ollama LLM model 
 llm = Ollama(model = "llama2")
@@ -62,28 +60,51 @@ llm = Ollama(model = "llama2")
 # Output parser to get clean string outputs
 output_parser = StrOutputParser()
 
-
 # Create the chain
 llm_chain = LLMChain(
     llm=llm,
     prompt=prompt,
     memory=memory,
-    output_key="text"  # optional
+    output_key="text"
 )
 
-# -----------------------------
-# Handle User Input
-# -----------------------------
+def ask_techpal(query):
+    return llm_chain.run({"input": query})
+
+
+
+# ----------------------------- Display Chat History -----------------------------
+
+for msg in st.session_state.chat_history:
+    with st.chat_message("assistant" if msg.startswith("💡") else "user"):
+        st.write(msg)
+
+
+
+# ----------------------------- Input & Submit -----------------------------
+
+user_input = st.text_input(
+    "Enter your query and let TechPal handle it! ⚡", 
+    key="chat_input",
+    value=""  # starts empty or resets automatically on rerun
+)
+submit = st.button("Send") 
 
 # Initialize response variable
 response = ""  
 
 # Only run if user entered something
-if input_txt:
-    # Invoke chain with role + query
-    combined_input = f"Role: {role}\nUser query: {input_txt}"
-    response = llm_chain.run(combined_input)
+if submit and user_input.strip():
+    st.session_state.chat_history.append(f"{role}: {user_input}")
 
-    # Display the response
-    st.write("💡 TechPal says:")
-    st.write(response)
+    with st.spinner("💭 TechPal is thinking..."):
+        response = ask_techpal(user_input)
+
+    # Append user query and AI response to session chat history
+    st.session_state.chat_history.append(f"💡 TechPal says: {response}")
+
+# Display all chat history
+for msg in st.session_state.chat_history:
+    st.chat_message("assistant" if msg.startswith("💡") else "user").write(msg)
+
+

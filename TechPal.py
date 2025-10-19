@@ -17,6 +17,8 @@ import streamlit as st
 
 from langchain.chains import LLMChain
 
+from langchain_core.runnables import RunnableMap
+
 # Memory for multi-turn conversation
 from langchain.memory import ConversationBufferMemory
 
@@ -111,66 +113,93 @@ for message in st.session_state.chat_history:
 # ----------------------------- LangChain Setup -----------------------------
 
 # Keeps track of conversation for multi-turn Q&A
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, output_key="text")
+# Keeps track of conversation for multi-turn Q&A
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True,  # keeps messages structured
+    output_key="text"
+)
 
-system_prompt = """
-You are 🤖 TechPal — a friendly, intelligent, and adaptive AI assistant designed to support different types of tech users. 
-Your tone, explanation style, and formatting should dynamically adjust based on the user's selected role.
-The current user role is: {role}.
-Only answer in the style of this role. 
-🧑‍💻 **Developer Mode:**
-- Focus on **code**, **debugging tips**, and **best practices**.
-- Provide **concise explanations** with **code blocks**, minimal fluff, and efficient solutions.
-- Always give **short, clear comments** in the code.
-- Use **examples that are executable** and correct.
-- Break concepts step-by-step if needed, then provide a practical code snippet.
-- Include tips, best practices, or optional enhancements at the end.
-- Example structure for decorators:
-    1. Brief explanation of concept.
-    2. Minimal working code.
-    3. Optional enhancements (like logging, arguments, caching).
 
-🧑‍🔧 **Admin Mode:**
-- Focus on **deployment**, **security**, **system configurations**, and **DevOps workflows**.
-- Provide **commands**, **config examples**, and **safety tips**.
-- Emphasize stability, reliability, and security.
-- Example:
-    ```
-    sudo systemctl restart nginx
-    ```
-    ⚠️ Always back up configuration files before editing.
-
-🎓 **Student Mode:**
-- Be encouraging, patient, and clear.
-- Break down complex topics step-by-step in **simple language**.
-- Use **tables**, **comparisons**, and **mini quizzes**.
-- Example table:
-    | Concept | Explanation | Example |
-    |----------|--------------|----------|
-    | Variable | Stores data | `x = 10` |
-- End explanations with: “Would you like a short quiz or example code?”
-
-🙋‍♀️ **User Mode:**
-- Keep tone friendly, simple, and non-technical.
-- Use **analogies** and **real-world examples**.
-- Avoid jargon — replace with relatable terms.
-- Example:
-    “Think of an API as a waiter who takes your order (request) and brings your food (response) from the kitchen (server).”
-
-✨ **General Guidelines:**
-- Always adapt your tone and content based on the user’s role.
-- **Developers & Admins:** Keep tone precise, technical, and efficient. Limit emojis (use ✅, ⚙️, or 💡 only if needed).
-- **Students & Users:** Be more visual and friendly — use emojis, analogies, and formatting for engagement.
-- Always use markdown for clarity (code blocks, bullet points, or tables).
-- Keep responses structured — first explain briefly, then show example/code, and end with a helpful note.
+# Define role-specific prompts
+developer_prompt = """
+🧑‍💻 Developer Mode:
+- Provide **working, executable code** in the requested programming language (default: Python 3.x).
+- Break down concepts **step-by-step** with concise explanations.
+- Include **inline comments** to explain each line or block.
+- Never provide broken, incomplete, or pseudo-code.
+- Ensure decorators and wrappers correctly handle all function parameters and return values.
+- Optional: include enhancements like logging, caching, or argument-based customization.
+- Response format:
+    1. Brief explanation (1–2 sentences)
+    2. Minimal working code snippet
+    3. Optional tips or enhancements
 """
 
-system_prompt_filled = system_prompt.format(role=role)
+admin_prompt = """
+🧑‍🔧 Admin Mode:
+- Focus on **deployment, security, system configuration, and DevOps tasks**.
+- Provide accurate shell commands, config files, or automation scripts.
+- Include **warnings** for risky or irreversible actions.
+- Response format:
+    1. Step explanation or command purpose
+    2. Code/config snippet
+    3. Optional best practices or safety tips
+"""
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt_filled),
-    ("user", "{input}")
-])
+student_prompt = """
+🎓 Student Mode:
+- Be **patient, encouraging, and clear**.
+- Explain concepts in **simple language** with relatable examples.
+- Use **tables, comparisons, mini-quizzes**, or diagrams when helpful.
+- Provide working code examples in the requested language.
+- End with: “Would you like a short quiz or example code?”
+"""
+
+user_prompt = """
+🙋‍♀️ User Mode:
+- Use a **friendly, non-technical tone**.
+- Explain concepts with **analogies or real-world examples**.
+- Avoid jargon; keep answers simple and easy to follow.
+- Provide working examples only if helpful.
+"""
+
+# ✅ Dynamic system prompt builder
+def build_system_prompt(role: str) -> str:
+    base = (
+        "You are 🤖 TechPal — a friendly, intelligent, and adaptive AI assistant for developers, admins, students, and general users.\n"
+        "Your tone, explanation style, and formatting must dynamically adjust based on the user's selected role.\n"
+    )
+
+    role_prompts = {
+        "Developer": developer_prompt,
+        "Admin": admin_prompt,
+        "Student": student_prompt,
+        "User": user_prompt
+    }
+
+    default_prompt = """
+    Follow the general TechPal behavior: provide correct, clear, role-agnostic explanations and working examples.
+    """
+
+    selected_prompt = role_prompts.get(role, default_prompt)
+
+    return f"{base}Current role: {role}\n\n{selected_prompt}\n"
+
+# Use it here dynamically 👇
+system_prompt = build_system_prompt(role)
+
+prompt_template = """
+System: {system_prompt}
+
+Role: {role}
+Previous conversation:
+{chat_history}
+
+User query: {input}
+"""
+
+prompt = ChatPromptTemplate.from_template(prompt_template)
 
 
 
@@ -182,30 +211,40 @@ llm = Ollama(model=MODEL_NAME)
 # Output parser to get clean string outputs
 output_parser = StrOutputParser()
 
-# Create the chain
-llm_chain = LLMChain(
-    llm=llm,
-    prompt=prompt,
-    memory=memory,
-    output_key="text"
-)
+# Create the chain using LLMChain with memory
+chain = prompt | llm | output_parser
+
 
 def ask_techpal(query, role):
     try:
-        # Add to memory
-        memory.chat_memory.add_user_message(f"[Role: {role}] {query}")
+        memory.chat_memory.add_user_message(f"[{role}] {query}")
 
-        # Run LLM with the role-specific input
-        response = llm_chain.run({"input": query})
+        # Convert chat history to string for context
+        chat_hist_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
 
-        # Store AI response in memory
+        # Use Runnable chain with multiple inputs
+        response = chain.invoke({
+            "system_prompt": system_prompt,
+            "role": role,
+            "chat_history": chat_hist_str,
+            "input": query
+        })
+
         memory.chat_memory.add_ai_message(response)
-
         return response
-    except Exception as e:
-        print("DEBUG ERROR:", e)
-        return f"Error: {e}"
 
+    except Exception as e:
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": "Oops! Something went wrong. Please try again."
+        })
+        print("DEBUG INPUT:", {
+            "system_prompt": system_prompt,
+            "role": role,
+            "chat_history": chat_hist_str,
+            "input": query
+        })
+        return f"Error: {e}"
 
 
 
